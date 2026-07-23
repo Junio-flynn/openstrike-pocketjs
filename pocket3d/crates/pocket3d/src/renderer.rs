@@ -505,7 +505,13 @@ impl ModelPass {
             inst_bytes[off..off + std::mem::size_of::<InstanceRaw>()]
                 .copy_from_slice(bytemuck::bytes_of(&raw));
 
-            inst.asset.joint_palette(&inst.anim, &mut palette);
+            inst.asset.joint_palette_blended(
+                &inst.anim,
+                inst.blend_from.as_ref(),
+                inst.blend_factor,
+                inst.upper_body_pitch,
+                &mut palette,
+            );
             if palette.len() as u64 * 64 > JOINT_WINDOW {
                 log::warn!("model has {} joints; truncating to 128", palette.len());
                 palette.truncate((JOINT_WINDOW / 64) as usize);

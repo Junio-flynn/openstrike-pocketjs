@@ -19,10 +19,10 @@ pub struct SkyParams {
 
 impl Default for SkyParams {
     fn default() -> Self {
-        // Dust-flavored defaults, matching pocket3d::scene::Sky.
+        // OpenStrike's late-afternoon desert palette, matching desktop.
         Self {
-            zenith: Vec3::new(0.34, 0.48, 0.66),
-            horizon: Vec3::new(0.93, 0.79, 0.62),
+            zenith: Vec3::new(0.22, 0.39, 0.62),
+            horizon: Vec3::new(0.88, 0.68, 0.43),
         }
     }
 }

@@ -15,6 +15,8 @@ pub struct Camera3d {
     pub yaw: f32,
     /// Radians. Positive looks up.
     pub pitch: f32,
+    /// Radians about the view axis. Positive rolls the camera clockwise.
+    pub roll: f32,
     pub fov_y: f32,
     pub aspect: f32,
     pub znear: f32,
@@ -27,6 +29,7 @@ impl Default for Camera3d {
             pos: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
+            roll: 0.0,
             fov_y: 70f32.to_radians(),
             // Vita's 960x544 framebuffer has the PSP's exact aspect ratio.
             aspect: 960.0 / 544.0,
@@ -54,7 +57,11 @@ impl Camera3d {
     }
 
     pub fn view(&self) -> Mat4 {
-        glam::camera::rh::view::look_to_mat4(self.pos, self.forward(), Vec3::Y)
+        let (sr, cr) = sin_cos(self.roll);
+        let forward = self.forward();
+        let right = self.right();
+        let up = right.cross(forward) * cr + right * sr;
+        glam::camera::rh::view::look_to_mat4(self.pos, forward, up)
     }
 
     /// OpenGL-style clip depth (-w..w), which the CPU clipper consumes.

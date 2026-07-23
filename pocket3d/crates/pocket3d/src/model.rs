@@ -48,6 +48,7 @@ pub struct ModelAsset {
     pub ibuf: wgpu::Buffer,
     pub primitives: Vec<Primitive>,
     pub skeleton: Skeleton,
+    pub node_names: Vec<String>,
     /// All skins in the file. The joint palette concatenates them in order;
     /// vertex joint indices were remapped at load to address the combined
     /// palette (multi-skin characters: body + visor etc.).
@@ -73,10 +74,35 @@ impl ModelAsset {
     /// Joint palette for the given animation state (identity if no skin).
     /// Skins concatenate in file order, matching the load-time joint remap.
     pub fn joint_palette(&self, anim: &AnimState, out: &mut Vec<Mat4>) {
+        self.joint_palette_blended(anim, None, 1.0, 0.0, out);
+    }
+
+    pub fn joint_palette_blended(
+        &self,
+        anim: &AnimState,
+        blend_from: Option<&AnimState>,
+        blend_factor: f32,
+        upper_body_pitch: f32,
+        out: &mut Vec<Mat4>,
+    ) {
         let mut globals = Vec::new();
         let clip = self.clips.get(anim.clip);
-        self.skeleton
-            .global_transforms(clip, anim.time, anim.looping, &mut globals);
+        if let Some(from) = blend_from.filter(|_| blend_factor < 1.0) {
+            self.skeleton.global_transforms_blended(
+                self.clips.get(from.clip),
+                from.time,
+                from.looping,
+                clip,
+                anim.time,
+                anim.looping,
+                blend_factor,
+                &mut globals,
+            );
+        } else {
+            self.skeleton
+                .global_transforms(clip, anim.time, anim.looping, &mut globals);
+        }
+        self.apply_upper_body_pitch(&mut globals, upper_body_pitch);
         out.clear();
         for skin in &self.skins {
             for (i, &node) in skin.joints.iter().enumerate() {
@@ -86,6 +112,75 @@ impl ModelAsset {
         if out.is_empty() {
             out.push(Mat4::IDENTITY);
         }
+    }
+
+    pub fn node_index(&self, name: &str) -> Option<usize> {
+        self.node_names.iter().position(|node| node == name)
+    }
+
+    /// Sample every animated node using the same cross-fade as skinning.
+    /// Attachments and ground anchors can therefore follow the visible pose.
+    pub fn node_globals_blended(
+        &self,
+        anim: &AnimState,
+        blend_from: Option<&AnimState>,
+        blend_factor: f32,
+        upper_body_pitch: f32,
+        out: &mut Vec<Mat4>,
+    ) {
+        if let Some(from) = blend_from.filter(|_| blend_factor < 1.0) {
+            self.skeleton.global_transforms_blended(
+                self.clips.get(from.clip),
+                from.time,
+                from.looping,
+                self.clips.get(anim.clip),
+                anim.time,
+                anim.looping,
+                blend_factor,
+                out,
+            );
+        } else {
+            self.skeleton.global_transforms(
+                self.clips.get(anim.clip),
+                anim.time,
+                anim.looping,
+                out,
+            );
+        }
+        self.apply_upper_body_pitch(out, upper_body_pitch);
+    }
+
+    fn apply_upper_body_pitch(&self, globals: &mut [Mat4], pitch: f32) {
+        if pitch.abs() < 0.0001 {
+            return;
+        }
+        let Some(root) = self.node_index("mixamorig:Spine1") else {
+            return;
+        };
+        let pivot = globals[root].transform_point3(Vec3::ZERO);
+        // The imported SWAT faces model-local +Z, so negative X rotation
+        // follows OpenStrike's positive (look-up) pitch convention.
+        let delta = Mat4::from_translation(pivot)
+            * Mat4::from_rotation_x(-pitch)
+            * Mat4::from_translation(-pivot);
+        for index in 0..globals.len() {
+            let mut ancestor = index;
+            loop {
+                if ancestor == root {
+                    globals[index] = delta * globals[index];
+                    break;
+                }
+                let parent = self.skeleton.parents[ancestor];
+                if parent == usize::MAX {
+                    break;
+                }
+                ancestor = parent;
+            }
+        }
+    }
+
+    pub fn rest_node_globals(&self, out: &mut Vec<Mat4>) {
+        self.skeleton.global_transforms(None, 0.0, false, out);
     }
 
     /// The material bind group layout for model primitives (group 1).
@@ -175,6 +270,7 @@ impl ModelAsset {
                 rest: Vec::new(),
                 order: Vec::new(),
             },
+            node_names: Vec::new(),
             skins: Vec::new(),
             clips: Vec::new(),
             aabb,
@@ -210,6 +306,10 @@ impl ModelAsset {
 
         // --- nodes / skeleton ----------------------------------------------
         let node_count = doc.nodes().count();
+        let node_names: Vec<String> = doc
+            .nodes()
+            .map(|node| node.name().unwrap_or_default().to_owned())
+            .collect();
         let mut parents = vec![usize::MAX; node_count];
         let mut rest = vec![NodeTrs::IDENTITY; node_count];
         for node in doc.nodes() {
@@ -506,6 +606,7 @@ impl ModelAsset {
             ibuf,
             primitives,
             skeleton,
+            node_names,
             skins,
             clips,
             aabb,
@@ -577,6 +678,9 @@ pub struct ModelInstance {
     pub transform: Mat4,
     pub tint: [f32; 4],
     pub anim: AnimState,
+    pub blend_from: Option<AnimState>,
+    pub blend_factor: f32,
+    pub upper_body_pitch: f32,
     /// 0..1 how strongly lighting applies (1 = fully lit by sun/ambient).
     pub lit: f32,
 }
@@ -588,6 +692,9 @@ impl ModelInstance {
             transform: Mat4::IDENTITY,
             tint: [1.0; 4],
             anim: AnimState::default(),
+            blend_from: None,
+            blend_factor: 1.0,
+            upper_body_pitch: 0.0,
             lit: 1.0,
         }
     }

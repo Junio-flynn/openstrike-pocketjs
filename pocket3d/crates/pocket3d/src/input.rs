@@ -14,6 +14,8 @@ pub struct Input {
     mouse_down: HashSet<u8>,
     mouse_pressed: HashSet<u8>,
     mouse_delta: Vec2,
+    cursor_delta: Vec2,
+    cursor_last: Option<Vec2>,
 }
 
 fn button_id(b: MouseButton) -> u8 {
@@ -57,6 +59,17 @@ impl Input {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                let now = Vec2::new(position.x as f32, position.y as f32);
+                if let Some(last) = self.cursor_last {
+                    self.cursor_delta += now - last;
+                }
+                self.cursor_last = Some(now);
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_delta = Vec2::ZERO;
+                self.cursor_last = None;
+            }
             WindowEvent::Focused(false) => self.clear(),
             _ => {}
         }
@@ -75,6 +88,8 @@ impl Input {
         self.mouse_down.clear();
         self.mouse_pressed.clear();
         self.mouse_delta = Vec2::ZERO;
+        self.cursor_delta = Vec2::ZERO;
+        self.cursor_last = None;
     }
 
     /// Call once per rendered frame, after game logic consumed the state.
@@ -82,6 +97,7 @@ impl Input {
         self.pressed.clear();
         self.mouse_pressed.clear();
         self.mouse_delta = Vec2::ZERO;
+        self.cursor_delta = Vec2::ZERO;
     }
 
     pub fn key_down(&self, code: KeyCode) -> bool {
@@ -99,6 +115,12 @@ impl Input {
     }
     pub fn mouse_delta(&self) -> Vec2 {
         self.mouse_delta
+    }
+    pub fn cursor_delta(&self) -> Vec2 {
+        self.cursor_delta
+    }
+    pub fn cursor_position(&self) -> Option<Vec2> {
+        self.cursor_last
     }
 
     // --- synthetic injection (headless scripting/tests) -------------------

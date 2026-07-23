@@ -120,17 +120,8 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
-    /// Sample `clip` at `t` (wrapping if `looping`) and return global
-    /// transforms per node.
-    pub fn global_transforms(
-        &self,
-        clip: Option<&Clip>,
-        t: f32,
-        looping: bool,
-        globals: &mut Vec<Mat4>,
-    ) {
-        let n = self.rest.len();
-        let mut locals: Vec<NodeTrs> = self.rest.clone();
+    fn sampled_locals(&self, clip: Option<&Clip>, t: f32, looping: bool) -> Vec<NodeTrs> {
+        let mut locals = self.rest.clone();
         if let Some(clip) = clip {
             let t = if clip.duration > 0.0 {
                 if looping {
@@ -141,14 +132,18 @@ impl Skeleton {
             } else {
                 0.0
             };
-            for ch in &clip.channels {
-                if ch.node < n {
-                    ch.sample(t, &mut locals[ch.node]);
+            for channel in &clip.channels {
+                if channel.node < locals.len() {
+                    channel.sample(t, &mut locals[channel.node]);
                 }
             }
         }
+        locals
+    }
+
+    fn globals_from_locals(&self, locals: &[NodeTrs], globals: &mut Vec<Mat4>) {
         globals.clear();
-        globals.resize(n, Mat4::IDENTITY);
+        globals.resize(locals.len(), Mat4::IDENTITY);
         for &i in &self.order {
             let local = locals[i].matrix();
             globals[i] = if self.parents[i] == usize::MAX {
@@ -157,6 +152,48 @@ impl Skeleton {
                 globals[self.parents[i]] * local
             };
         }
+    }
+
+    /// Sample `clip` at `t` (wrapping if `looping`) and return global
+    /// transforms per node.
+    pub fn global_transforms(
+        &self,
+        clip: Option<&Clip>,
+        t: f32,
+        looping: bool,
+        globals: &mut Vec<Mat4>,
+    ) {
+        let locals = self.sampled_locals(clip, t, looping);
+        self.globals_from_locals(&locals, globals);
+    }
+
+    /// Cross-fade two sampled clips in local bone space before rebuilding the
+    /// hierarchy. Quaternion slerp avoids the shearing produced by blending
+    /// final joint matrices.
+    pub fn global_transforms_blended(
+        &self,
+        from: Option<&Clip>,
+        from_t: f32,
+        from_looping: bool,
+        to: Option<&Clip>,
+        to_t: f32,
+        to_looping: bool,
+        factor: f32,
+        globals: &mut Vec<Mat4>,
+    ) {
+        let from_locals = self.sampled_locals(from, from_t, from_looping);
+        let to_locals = self.sampled_locals(to, to_t, to_looping);
+        let factor = factor.clamp(0.0, 1.0);
+        let locals: Vec<_> = from_locals
+            .iter()
+            .zip(to_locals.iter())
+            .map(|(from, to)| NodeTrs {
+                translation: from.translation.lerp(to.translation, factor),
+                rotation: from.rotation.slerp(to.rotation, factor),
+                scale: from.scale.lerp(to.scale, factor),
+            })
+            .collect();
+        self.globals_from_locals(&locals, globals);
     }
 }
 

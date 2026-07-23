@@ -18,6 +18,8 @@ pub struct Camera3d {
     pub yaw: f32,
     /// Radians. Positive looks up. Clamp to about +-89 deg.
     pub pitch: f32,
+    /// Radians about the view axis. Positive rolls the camera clockwise.
+    pub roll: f32,
     pub fov_y: f32,
     pub aspect: f32,
     pub znear: f32,
@@ -30,6 +32,7 @@ impl Default for Camera3d {
             pos: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
+            roll: 0.0,
             fov_y: 70f32.to_radians(),
             aspect: 480.0 / 272.0,
             // GoldSrc scale; zfar trimmed to map scale for 16-bit depth.
@@ -58,7 +61,11 @@ impl Camera3d {
     }
 
     pub fn view(&self) -> Mat4 {
-        glam::camera::rh::view::look_to_mat4(self.pos, self.forward(), Vec3::Y)
+        let (sr, cr) = sin_cos(self.roll);
+        let forward = self.forward();
+        let right = self.right();
+        let up = right.cross(forward) * cr + right * sr;
+        glam::camera::rh::view::look_to_mat4(self.pos, forward, up)
     }
 
     pub fn proj(&self) -> Mat4 {

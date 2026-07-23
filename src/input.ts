@@ -535,6 +535,27 @@ export function cursorY(): number {
   return cursor && cursor.y >= 0 ? cursor.y : NaN;
 }
 
+/** Place the virtual cursor at an absolute logical-pixel position. Desktop
+ *  hosts use this to align invisible UI hit testing with the OS pointer. */
+export function setCursorPosition(x: number, y: number): void {
+  if (!cursor || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  cursor.x = Math.max(0, cursor.vw > 0 ? Math.min(cursor.vw - 1, x) : x);
+  cursor.y = Math.max(0, cursor.vh > 0 ? Math.min(cursor.vh - 1, y) : y);
+  cursor.fresh = true;
+}
+
+/** Clear hover/focus while the OS pointer is outside the game content. */
+export function clearCursorPosition(): void {
+  if (!cursor) return;
+  cursor.target = null;
+  cursor.pressTarget = null;
+  setPressedNode(null);
+  focusNode(null);
+  cursor.x = (cursor.vw || SCREEN_W) + 1;
+  cursor.y = (cursor.vh || SCREEN_H) + 1;
+  cursor.fresh = true;
+}
+
 /** Lazy sprite init/swap: runs on the first frame after enableCursor (ops
  *  are guaranteed live here; enableCursor itself may run before mount). */
 function cursorInitSprite(c: CursorState, ops: HostOps): void {

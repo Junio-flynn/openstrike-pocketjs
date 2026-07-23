@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::KeyCode;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::camera::Camera;
@@ -48,6 +48,13 @@ pub trait Game {
     fn frame(&mut self, dt: f32, input: &Input);
     /// Fixed-step simulation.
     fn tick(&mut self, dt: f32, input: &Input);
+    /// Apply resource changes requested by the preceding frame/ticks. This is
+    /// called with GPU access before composition, allowing games to replace
+    /// worlds at runtime without retaining renderer references.
+    fn prepare(&mut self, gpu: &Gpu, renderer: &Renderer) -> Result<()> {
+        let (_, _) = (gpu, renderer);
+        Ok(())
+    }
     /// Provide the frame to draw. `time` is seconds since launch.
     fn compose(&mut self, alpha: f32, time: f32, size: (u32, u32)) -> (&Scene, &Camera, &Hud);
     /// Record extra passes over the finished frame (UI overlays, composite
@@ -67,6 +74,16 @@ pub trait Game {
     fn wants_exit(&self) -> bool {
         false
     }
+    /// Some embedded UIs draw their own pointer and need the OS cursor to
+    /// remain captured/hidden even after Escape. `None` keeps the app-loop
+    /// default; `Some(true/false)` continuously enforces the requested mode.
+    fn wants_mouse_capture(&self) -> Option<bool> {
+        None
+    }
+    /// Called once for a non-repeating physical Escape key press. Games with
+    /// an in-process menu can switch modes here without waiting for redraw or
+    /// fixed-timestep input sampling.
+    fn escape_pressed(&mut self) {}
 }
 
 pub fn run(config: AppConfig, game: impl Game) -> Result<()> {
@@ -159,9 +176,23 @@ impl<G: Game> WinitApp<G> {
         for _ in 0..ticks {
             self.game.tick(state.timestep.step, &state.input);
         }
+        // Apply a game-owned mode change after both frame and fixed-tick
+        // callbacks have had a chance to update it. This keeps cursor state
+        // and the UI/simulation state on the same presented frame.
+        if let Some(captured) = self.game.wants_mouse_capture()
+            && captured != state.mouse_captured
+        {
+            set_mouse_capture(state, captured);
+        }
         state.input.end_frame();
 
         if self.game.wants_exit() {
+            event_loop.exit();
+            return;
+        }
+        if let Err(error) = self.game.prepare(&state.gpu, &state.renderer) {
+            log::error!("game preparation failed: {error:#}");
+            self.error = Some(error);
             event_loop.exit();
             return;
         }
@@ -251,15 +282,27 @@ impl<G: Game> ApplicationHandler for WinitApp<G> {
                     .surface
                     .configure(&state.gpu.device, &state.surface_config);
             }
-            WindowEvent::KeyboardInput { .. } => {
-                if state.input.key_pressed(KeyCode::Escape) {
+            WindowEvent::KeyboardInput { event, .. } => {
+                let escape_pressed = event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.physical_key == PhysicalKey::Code(KeyCode::Escape);
+                if escape_pressed {
+                    log::info!("input: physical Escape pressed");
+                    self.game.escape_pressed();
+                }
+                // Games returning Some from wants_mouse_capture own their
+                // gameplay/menu transition. The engine's legacy Escape
+                // toggle is only for games that do not manage capture.
+                if self.game.wants_mouse_capture().is_none()
+                    && escape_pressed
+                {
                     let captured = !state.mouse_captured;
                     set_mouse_capture(state, captured);
                 }
             }
             WindowEvent::MouseInput { .. } => {
                 // Clicking back into the window recaptures the mouse.
-                if !state.mouse_captured {
+                if !state.mouse_captured && self.game.wants_mouse_capture() != Some(false) {
                     set_mouse_capture(state, true);
                 }
             }
