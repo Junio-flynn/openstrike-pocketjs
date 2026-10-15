@@ -391,6 +391,15 @@ impl ModelAsset {
 
         for node in doc.nodes() {
             let Some(mesh) = node.mesh() else { continue };
+            // Weapon exports often include the DCC camera rig as visible
+            // geometry (default Cube, Icosphere, camera and floor helpers).
+            // Those helpers are not part of the weapon, and the 2m cube in
+            // particular corrupts viewmodel bounds so the real gun is scaled
+            // down to a tiny speck. Keep the node in the skeleton, but skip
+            // its mesh while building render geometry and bounds.
+            if is_weapon_asset(path) && is_weapon_helper_mesh(node.name().unwrap_or_default()) {
+                continue;
+            }
             let node_skin = node.skin().map(|s| s.index()).filter(|&i| i < skins.len());
             let bake = if node_skin.is_some() {
                 Mat4::IDENTITY
@@ -613,6 +622,22 @@ impl ModelAsset {
             textures,
         }))
     }
+}
+
+fn is_weapon_asset(path: &Path) -> bool {
+    path.components().any(|component| component.as_os_str() == "weapons")
+}
+
+fn is_weapon_helper_mesh(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "cube"
+        || name.starts_with("cube.")
+        || name.starts_with("cube_")
+        || name == "icosphere"
+        || name.starts_with("icosphere.")
+        || name.starts_with("plane.")
+        || name == "shape_camera"
+        || name == "shape_pole"
 }
 
 fn flatten3(v: Vec<[f32; 3]>, cubic: bool) -> Vec<f32> {
